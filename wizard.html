@@ -1,0 +1,252 @@
+
+   <!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8"/>
+<title>AI Book Builder</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  body{background:#0d1117;color:#e6e6e6;font-family:Segoe UI,Arial,sans-serif;padding:20px}
+  .chat{max-width:900px;margin:auto;background:#161b22;padding:20px;border-radius:12px}
+  .msg{margin:10px 0;padding:10px;border-radius:8px;background:#21262d;border:1px solid #30363d}
+  .card{background:#21262d;border:1px solid #30363d;border-radius:10px;padding:12px;margin:8px 0}
+  .small{font-size:12px;color:#9aa4b2}
+  .row{display:flex;flex-wrap:wrap;gap:10px}
+  button{background:#238636;border:0;padding:10px 14px;border-radius:8px;color:#fff;cursor:pointer}
+  button.gray{background:#3a3f45}
+  pre{white-space:pre-wrap;margin:0}
+</style>
+</head>
+<body>
+<div class="chat">
+  <h2>✍️ AI Book Builder</h2>
+  <div id="msgs"></div>
+
+  <div class="card">
+    <div class="small">Välj genre:</div>
+    <div class="row" style="margin-top:6px">
+      <button onclick="getTopics('Romance')">💗 Romance</button>
+      <button onclick="getTopics('Thriller')">🔪 Thriller</button>
+      <button class="gray" disabled>🐉 Fantasy (kommer)</button>
+      <button class="gray" disabled>🕵️ Mystery (kommer)</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <button onclick="stepSOPs()">📚 Publishing Checklists</button>
+    <button onclick="stepVault()">✨ Writing Helpers</button>
+<button onclick="loadProjects()">📂 My Saved Books</button>
+
+  </div>
+</div>
+
+<script>
+const API = "http://127.0.0.1:8002";   // <-- match the port you started
+const msgs = document.getElementById("msgs");
+let selectedTopic = null;
+window._lastOutline = [];
+window._lastCharacters = [];
+window._lastChapter1 = null;
+
+function add(t){ const d=document.createElement("div"); d.className="msg"; d.textContent=t; msgs.appendChild(d);}
+function addCard(html){ const d=document.createElement("div"); d.className="card"; d.innerHTML=html; msgs.appendChild(d);}
+function clearMsgs(){ msgs.innerHTML=""; }
+
+// -------- TOPICS ----------
+async function getTopics(genre){
+  clearMsgs();
+  add("Hämtar bokidéer för " + genre + "…");
+  const res = await fetch(API + "/topics?genre=" + encodeURIComponent(genre));
+  if(!res.ok){ add("Fel från API /topics ("+res.status+")"); return; }
+  const items = await res.json();
+  if(!items.length){ add("Inga förslag hittades."); return; }
+
+  items.forEach(t=>{
+    addCard(`
+      <div><strong>${t.genre}</strong> • <span class="small">${t.est_words}</span></div>
+      <div style="margin:6px 0">${t.pitch}</div>
+      <div class="small">Tropes: ${t.trope}</div>
+      <div class="row" style="margin-top:8px">
+        <button onclick='selectTopic(${JSON.stringify(t)})'>✅ Välj</button>
+      </div>
+    `);
+  });
+}
+
+function selectTopic(t){
+  selectedTopic = t;
+  clearMsgs();
+  addCard(`<strong>✔️ Du valde:</strong><br>${t.pitch}`);
+  addCard(`
+    <div class="small">Vad vill du göra nu?</div>
+    <div class="row" style="margin-top:8px">
+      <button onclick="genOutline()">📚 Skapa Outline</button>
+      <button onclick="genCharacters()">🎭 Skapa Karaktärer</button>
+      <button onclick="turboWrite()">⚡ Turbo Skriv Kapitel 1</button>
+      <button class="gray" disabled>📝 Skapa Blurb (kommer)</button>
+    </div>
+  `);
+}
+
+// -------- OUTLINE ----------
+async function genOutline(){
+  if(!selectedTopic){ add("Välj en idé först."); return; }
+  add("Skapar outline…");
+  const body = {
+    genre: selectedTopic.genre,
+    pitch: selectedTopic.pitch,
+    est_words: selectedTopic.est_words,
+    outline_hint: selectedTopic.outline_hint || ""
+  };
+  const res = await fetch(API + "/outline/generate", {
+    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)
+  });
+  const data = await res.json();
+  window._lastOutline = data.outline || [];
+  clearMsgs(); add("🧠 Outline klar:");
+  window._lastOutline.forEach(ch=>{
+    addCard(`<strong>${ch.title}</strong><div class="small">${ch.pov}</div><div>${ch.goal}</div>`);
+  });
+}
+
+// -------- CHARACTERS ----------
+async function genCharacters(){
+  if(!selectedTopic){ add("Välj en idé först."); return; }
+  add("Skapar karaktärer…");
+  const body = { genre: selectedTopic.genre, pitch: selectedTopic.pitch };
+  const res = await fetch(API + "/characters/generate", {
+    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)
+  });
+  const data = await res.json();
+  window._lastCharacters = data.characters || [];
+  clearMsgs(); add("🎭 Karaktärer:");
+  window._lastCharacters.forEach(c=>{
+    addCard(`<strong>${c.name}</strong> — ${c.role}<div class="small">${c.traits}</div>
+      <div>GMC: ${c.gmc.goal} / ${c.gmc.motivation} / ${c.gmc.conflict}</div>
+      <div class="small">Ovana: ${c.quirk} • Arc: ${c.arc}</div>`);
+  });
+}
+
+// -------- TURBO WRITE ----------
+async function turboWrite(){
+  if(!selectedTopic){ add("Välj en idé först."); return; }
+  add("⚡ Turbo startar…");
+
+  // 1) Outline
+  try { await genOutline(); } catch(e){ console.error(e); }
+  // 2) Characters
+  try { await genCharacters(); } catch(e){ console.error(e); }
+
+  // 3) Chapter 1
+  add("✍️ Skriver Kapitel 1…");
+  const body = {
+    genre: selectedTopic.genre,
+    pitch: selectedTopic.pitch,
+    outline: window._lastOutline || [],
+    characters: window._lastCharacters || [],
+    target_words: 900
+  };
+  const res = await fetch(API + "/chapters/write", {
+    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)
+  });
+  if(!res.ok){
+    const txt = await res.text();
+    add("Fel från /chapters/write ("+res.status+"): " + txt);
+    return;
+  }
+  const data = await res.json();
+  const ch = data.chapter;
+  clearMsgs();
+  addCard(`<strong>${ch.title}</strong> — <span class="small">POV: ${ch.pov}</span>`);
+  addCard(`<pre>${ch.text}</pre>`);
+  window._lastChapter1 = ch;
+addCard(`<button onclick="saveProject()">💾 Save Book</button>`);
+
+}
+
+// -------- SOPs / VAULT ----------
+async function stepSOPs(){
+  clearMsgs(); add("Hämtar publishing checklists…");
+  const r = await fetch(API + "/sops"); const s = await r.json();
+  s.forEach(x=> addCard(`<strong>${x.title}</strong><br><pre>${x.steps_md}</pre>`));
+}
+async function stepVault(){
+  clearMsgs(); add("Hämtar writing helpers…");
+  const r = await fetch(API + "/vault"); const v = await r.json();
+  v.forEach(x=> addCard(`<strong>${x.title}</strong> <span class="small">(${x.genre})</span><br><pre>${x.body_md}</pre>`));
+}
+
+add("Hej Emma 🌟 Välj genre för att starta.");
+async function saveProject(){
+  const title = prompt("Book Title:", selectedTopic.pitch.slice(0,40));
+
+  const body = {
+    title,
+    genre: selectedTopic.genre,
+    pitch: selectedTopic.pitch,
+    outline: window._lastOutline || [],
+    characters: window._lastCharacters || [],
+    chapter1: window._lastChapter1 || {}
+  };
+
+  const res = await fetch(API + "/projects/save", {
+    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)
+  });
+
+  if(res.ok){
+    add("✅ Book saved!");
+  } else {
+    add("❌ Failed to save book.");
+  }
+}
+async function loadProjects(){
+  clearMsgs();
+  add("📂 Loading saved books…");
+
+  const res = await fetch(API + "/projects/list");
+  if(!res.ok){
+    add("❌ Could not load list (" + res.status + ")");
+    return;
+  }
+  const data = await res.json();
+
+  if(data.length === 0){
+    add("❕ You have no saved books yet.");
+    return;
+  }
+
+  data.forEach(p=>{
+    // p is like [id, title, genre, created_at]
+    addCard(`
+      <strong>${p[1]}</strong> — <span class="small">${p[2]}</span><br>
+      <span class="small">Created: ${p[3]}</span>
+      <br><br>
+      <button onclick="openProject(${p[0]})">📖 Open</button>
+    `);
+  });
+}
+
+async function openProject(id){
+  clearMsgs();
+  add("📖 Loading book…");
+
+  const res = await fetch(API + "/projects/load/" + id);
+  if(!res.ok){
+    add("❌ Could not load book (" + res.status + ")");
+    return;
+  }
+  const data = await res.json();
+
+  // restore app state
+  window._lastOutline   = data.outline   || [];
+  window._lastCharacters= data.characters|| [];
+  window._lastChapter1  = data.chapter1  || {};
+
+  add("✅ Book loaded!");
+  addCard(`<strong>${data.title}</strong>`);
+  add("You can now continue writing.");
+}
+
+</script>
+</body>
+</html>
